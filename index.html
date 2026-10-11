@@ -57,9 +57,9 @@ button:disabled{opacity:.45;cursor:default}
 .preview span{position:absolute;right:6px;bottom:5px;font:600 .7rem var(--mono);color:var(--paper);background:var(--ink);padding:0 4px;border-radius:3px}
 .clue{position:absolute;display:grid;place-items:center;font-family:var(--mono);font-weight:600;font-size:clamp(.95rem,4.2vw,1.3rem);pointer-events:none;z-index:2}
 .board.done{cursor:default}
-.board.done .box>div{animation:pop .5s ease both}
+.board.celebrate .box>div{animation:pop .5s ease both}
 @keyframes pop{50%{transform:scale(.92)}}
-@media (prefers-reduced-motion:reduce){.board.done .box>div{animation:none}}
+@media (prefers-reduced-motion:reduce){.board.celebrate .box>div{animation:none}}
 .key{display:flex;flex-wrap:wrap;gap:6px;font:600 .75rem var(--mono)}
 .key span{display:inline-grid;place-items:center;width:28px;height:24px;border-radius:4px;border:2px solid hsl(var(--h) var(--edge-s) var(--edge-l));background:hsl(var(--h) var(--fill-s) var(--fill-l))}
 .win{background:var(--paper);border:1px solid var(--line);border-left:4px solid var(--ink);border-radius:6px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
@@ -194,22 +194,55 @@ const todayStr=(()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getM
 const EPOCH=Date.UTC(2026,9,10); /* 10 Oct 2026 is puzzle No. 1 */
 const dayNum=Math.round((Date.UTC(...todayStr.split('-').map((v,i)=>i===1?v-1:+v))-EPOCH)/864e5)+1;
 
-let puzzle,rects,history,startAt,penalty,timerId,finished,isDaily,label;
+let puzzle,rects,history,startAt,penalty,timerId,finished,isDaily,label,seed,winMsg='';
 
 function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+function readJSON(k){try{return JSON.parse(store(k)||'null')}catch(e){return null}}
 
-function load(daily){
+/* Saved progress: today's daily game lives under its own date; CUR remembers which game was open last. */
+const CUR='ss-current', DAY_KEY='ss-daily-'+todayStr;
+function save(){
+  if(!puzzle)return;
+  const st={rects,history:history.slice(-40),t:Math.round(elapsed()),finished,msg:winMsg};
+  if(isDaily){store(DAY_KEY,JSON.stringify(st));store(CUR,JSON.stringify({date:todayStr,mode:'daily'}))}
+  else store(CUR,JSON.stringify(Object.assign({date:todayStr,mode:'random',seed},st)));
+}
+
+function load(daily,seedArg){
   isDaily=daily;
-  const seed=daily?hashStr('pigeonholes-'+todayStr):(Math.random()*2**32)>>>0;
+  seed=daily?hashStr('pigeonholes-'+todayStr):(seedArg ?? (Math.random()*2**32)>>>0);
   puzzle=generate(seed);
   label=daily?'No. '+dayNum:'Random #'+(seed%10000).toString().padStart(4,'0');
   $('pnum').textContent=label;
   $('pdate').textContent=daily?new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}):'Practice';
-  rects=[];history=[];startAt=null;penalty=0;finished=false;
-  clearInterval(timerId);$('timer').textContent='0:00';
-  $('win').hidden=true;board.classList.remove('done');
-  setButtons(true);render();
+  rects=[];history=[];startAt=null;penalty=0;finished=false;winMsg='';
+  clearInterval(timerId);
+  $('win').hidden=true;board.classList.remove('done','celebrate');
+  const saved=daily?readJSON(DAY_KEY):(seedArg!=null?readJSON(CUR):null);
+  if(saved&&(daily||saved.seed===seed)){
+    rects=saved.rects||[];history=saved.history||[];penalty=saved.t||0;finished=!!saved.finished;winMsg=saved.msg||'';
+  }
+  $('timer').textContent=fmt(penalty);
+  setButtons(!finished);render();
+  if(finished){board.classList.add('done');showWin()}
+  save();
 }
+
+function showWin(){
+  $('winTitle').textContent=isDaily?'Good boy. Today\'s squares are done.':'Good boy.';
+  $('winText').textContent=winMsg;$('daily').hidden=isDaily;$('win').hidden=false;
+}
+
+function boot(){
+  const cur=readJSON(CUR);
+  if(cur&&cur.date===todayStr&&cur.mode==='random'&&cur.seed!=null)load(false,cur.seed);
+  else load(true);
+}
+
+/* Pause the clock and save whenever the app is put away, so time away doesn't count. */
+function pauseAndSave(){if(startAt&&!finished){penalty=elapsed();startAt=null;clearInterval(timerId)}save()}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')pauseAndSave()});
+window.addEventListener('pagehide',pauseAndSave);
 
 function fmt(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
 function elapsed(){return startAt?(Date.now()-startAt)/1000+penalty:penalty}
@@ -237,7 +270,7 @@ function render(){
   previewEl=document.createElement('div');previewEl.className='preview';previewEl.hidden=true;previewEl.innerHTML='<div></div><span></span>';board.appendChild(previewEl);
 }
 
-function commit(next){history.push(rects.slice());rects=next;render();checkWin()}
+function commit(next){history.push(rects.slice());rects=next;render();checkWin();save()}
 function addRect(R){commit(rects.filter(x=>!overlap(x,R)).concat([R]))}
 
 function checkWin(){
@@ -246,14 +279,13 @@ function checkWin(){
   if(covered!==N||!rects.every(R=>status(R)==='ok'))return;
   finished=true;clearInterval(timerId);
   const t=elapsed();$('timer').textContent=fmt(t);
-  board.classList.add('done');setButtons(false);
+  board.classList.add('done','celebrate');setButtons(false);
   let msg='Solved in '+fmt(t)+'.';
   if(isDaily){const key='ph13-best-'+todayStr,prev=+store(key)||0;
     if(!prev||t<prev){store(key,String(Math.round(t)));if(prev)msg+=' New best for today (was '+fmt(prev)+').'}
     else msg+=' Your best today is '+fmt(prev)+'.';}
   msg+=' '+puzzle.clues.length+' boxes, all '+N+' squares filled.';
-  $('winTitle').textContent=isDaily?'Good boy. Today\'s squares are done.':'Good boy.';
-  $('winText').textContent=msg;$('daily').hidden=isDaily;$('win').hidden=false;
+  winMsg=msg;showWin();
 }
 
 /* ---------- input ---------- */
@@ -273,7 +305,7 @@ board.addEventListener('pointerup',end);board.addEventListener('pointercancel',(
 function showPreview(){const R=span(drag.a,drag.b);place(previewEl,R);previewEl.hidden=false;
   previewEl.querySelector('span').textContent=(R.c1-R.c0+1)+'×'+(R.r1-R.r0+1)+' = '+area(R)}
 
-$('undo').onclick=()=>{if(history.length){rects=history.pop();render()}};
+$('undo').onclick=()=>{if(history.length){rects=history.pop();render();save()}};
 $('clear').onclick=()=>{if(rects.length)commit([])};
 $('hint').onclick=()=>{
   const key=R=>R.r0+','+R.c0+','+R.r1+','+R.c1, have=new Set(rects.map(key));
@@ -292,7 +324,7 @@ $('copy').onclick=async()=>{
   setTimeout(()=>$('copy').textContent='Copy result',2000);
 };
 
-load(true);
+boot();
 </script>
 
 <script>

@@ -1,6 +1,6 @@
 // Offline support for Sly's Squares.
 // When you change any app file, bump VERSION so phones pick up the new copy.
-const VERSION = 'slys-squares-v1';
+const VERSION = 'slys-squares-v2';
 const APP_FILES = [
   './',
   './index.html',
